@@ -8,5 +8,9 @@ The private build repo publishes the UI image to GHCR; the recipe points at that
 
 ## Current status
 
-- AxeBC2 is distributed via this repo's recipe files (not mirrored into any community store).
+- Current dev-store package version: `0.1.6-dev`
+- Public repo package path here: `willitmod-dev-btc2/`
+- Mirrored dev-store package: `WillItMod/umbrel-dev-community-store/willitmod-dev-bc2`
+- Miner endpoint: `stratum+tcp://<host-ip>:2345`
+- For the cross-project version matrix and release/changelog pointers, see `https://github.com/WillItMod/AxeSuite/blob/main/docs/releases.md`.
 - BitcoinII Core (BC2) is bundled as a simple multi-arch Docker build in `willitmod-dev-btc2/data/bitcoiniid`.
