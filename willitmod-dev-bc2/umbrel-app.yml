@@ -2,7 +2,7 @@ manifestVersion: 1
 id: willitmod-dev-bc2
 category: bitcoin
 name: AxeBC2
-version: "0.1.6-dev"
+version: "0.1.7-dev"
 tagline: BC2 node + solo pool
 description: >-
   ALPHA RELEASE (DEV CHANNEL)

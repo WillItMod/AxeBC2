@@ -20,7 +20,7 @@ The private build repo publishes the UI image to GHCR; the recipe points at that
 
 ## Current status
 
-- Current dev-store package version: `0.1.6-dev`
+- Current dev-store package version: `0.1.7-dev`
 - Public repo package path here: `willitmod-dev-bc2/`
 - Mirrored dev-store package: `WillItMod/umbrel-dev-community-store/willitmod-dev-bc2`
 - Miner endpoint: `stratum+tcp://<host-ip>:2345`
