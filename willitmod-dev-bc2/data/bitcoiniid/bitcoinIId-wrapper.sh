@@ -160,7 +160,9 @@ if [ "$manual_reindex" -eq 1 ] || [ "$migration_reindex" -eq 1 ]; then
 
   child_pid=""
   # Invoked indirectly by the three traps below.
-  # shellcheck disable=SC2329
+  # ShellCheck versions before 0.11 use SC2317 for this trap-only function;
+  # 0.11 and later use SC2329.
+  # shellcheck disable=SC2317,SC2329
   forward_signal() {
     forwarded_signal="$1"
     if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
