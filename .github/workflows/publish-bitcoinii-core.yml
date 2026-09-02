@@ -573,13 +573,24 @@ jobs:
 
           docker buildx imagetools inspect "$candidate" --format '{{json .Provenance}}' >provenance.json
           docker buildx imagetools inspect "$candidate" --format '{{json .SBOM}}' >sbom.json
-          jq -e --arg revision "$GITHUB_SHA" --arg source "https://github.com/$GITHUB_REPOSITORY" '
-            .["linux/amd64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            .["linux/arm64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            .["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
-            .["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
-            (.["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source and
-            (.["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source
+          jq -e \
+            --arg revision "$GITHUB_SHA" \
+            --arg source_url "https://github.com/$GITHUB_REPOSITORY" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg version "$CORE_VERSION" '
+            def valid($p; $platform):
+              ($p | type) == "object" and
+              $p.SLSA.buildType == "https://mobyproject.org/buildkit@v1" and
+              $p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.revision == $revision and
+              ($p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.source | sub("\\.git$"; "")) == $source_url and
+              $p.SLSA.invocation.environment.github_workflow_sha == $revision and
+              $p.SLSA.invocation.environment.github_repository == $repository and
+              $p.SLSA.invocation.environment.platform == $platform and
+              $p.SLSA.invocation.parameters.args["label:org.opencontainers.image.revision"] == $revision and
+              ($p.SLSA.invocation.parameters.args["label:org.opencontainers.image.source"] | sub("\\.git$"; "")) == $source_url and
+              $p.SLSA.invocation.parameters.args["label:org.opencontainers.image.version"] == $version;
+            valid(.["linux/amd64"]; "linux/amd64") and
+            valid(.["linux/arm64"]; "linux/arm64")
           ' provenance.json >/dev/null
           jq -e '
             ((.["linux/amd64"] // {}) | type == "object" and length > 0) and
@@ -701,13 +712,24 @@ jobs:
 
           docker buildx imagetools inspect "$source" --format '{{json .Provenance}}' >provenance.json
           docker buildx imagetools inspect "$source" --format '{{json .SBOM}}' >sbom.json
-          jq -e --arg revision "$SOURCE_REVISION" --arg source_url "https://github.com/$GITHUB_REPOSITORY" '
-            .["linux/amd64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            .["linux/arm64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            .["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
-            .["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
-            (.["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source_url and
-            (.["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source_url
+          jq -e \
+            --arg revision "$SOURCE_REVISION" \
+            --arg source_url "https://github.com/$GITHUB_REPOSITORY" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg version "$CORE_VERSION" '
+            def valid($p; $platform):
+              ($p | type) == "object" and
+              $p.SLSA.buildType == "https://mobyproject.org/buildkit@v1" and
+              $p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.revision == $revision and
+              ($p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.source | sub("\\.git$"; "")) == $source_url and
+              $p.SLSA.invocation.environment.github_workflow_sha == $revision and
+              $p.SLSA.invocation.environment.github_repository == $repository and
+              $p.SLSA.invocation.environment.platform == $platform and
+              $p.SLSA.invocation.parameters.args["label:org.opencontainers.image.revision"] == $revision and
+              ($p.SLSA.invocation.parameters.args["label:org.opencontainers.image.source"] | sub("\\.git$"; "")) == $source_url and
+              $p.SLSA.invocation.parameters.args["label:org.opencontainers.image.version"] == $version;
+            valid(.["linux/amd64"]; "linux/amd64") and
+            valid(.["linux/arm64"]; "linux/arm64")
           ' provenance.json >/dev/null
           jq -e '
             ((.["linux/amd64"] // {}) | type == "object" and length > 0) and

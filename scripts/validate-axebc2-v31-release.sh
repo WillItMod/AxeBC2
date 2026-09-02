@@ -99,6 +99,28 @@ fi
 grep -Fq 'push-by-digest=true' "$workflow"
 grep -Fq 'provenance: mode=max' "$workflow"
 grep -Fq 'sbom: true' "$workflow"
+# Pinned BuildKit v0.26.2 emits the SLSA v0.2-style predicate exposed by
+# imagetools under `.SLSA`. Keep both candidate and promotion verification
+# locked to that exact schema and fail if an unreviewed v1-style path returns.
+# shellcheck disable=SC2016  # jq variables below are intentional literals.
+{
+  test "$(grep -Fc 'def valid($p; $platform):' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.buildType == "https://mobyproject.org/buildkit@v1"' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.revision == $revision' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.metadata["https://mobyproject.org/buildkit@v1#metadata"].vcs.source' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.environment.github_workflow_sha == $revision' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.environment.github_repository == $repository' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.environment.platform == $platform' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.parameters.args["label:org.opencontainers.image.revision"] == $revision' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.parameters.args["label:org.opencontainers.image.source"]' "$workflow")" -eq 2
+  test "$(grep -Fc '$p.SLSA.invocation.parameters.args["label:org.opencontainers.image.version"] == $version' "$workflow")" -eq 2
+  test "$(grep -Fc 'valid(.["linux/amd64"]; "linux/amd64")' "$workflow")" -eq 2
+  test "$(grep -Fc 'valid(.["linux/arm64"]; "linux/arm64")' "$workflow")" -eq 2
+}
+if grep -Eq 'SLSA\.(buildDefinition|runDetails)' "$workflow"; then
+  echo "Provenance verification uses a schema not emitted by pinned BuildKit v0.26.2" >&2
+  exit 1
+fi
 test "$(grep -Fc 'uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' "$workflow")" -eq 3
 test "$(grep -Fc 'version: v0.30.1' "$workflow")" -eq 3
 test "$(grep -Fc 'image=docker.io/moby/buildkit:v0.26.2@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa' "$workflow")" -eq 3
