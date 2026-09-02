@@ -1,6 +1,18 @@
 name: Publish BitcoinII Core image
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/publish-bitcoinii-core.yml
+      - README.md
+      - scripts/test-bitcoinii-wrapper.sh
+      - scripts/validate-axebc2-v31-release.sh
+      - willitmod-dev-bc2/LICENSES.md
+      - willitmod-dev-bc2/SHOCKWAVE_AUTHORIZATION.md
+      - willitmod-dev-bc2/docker-compose.yml
+      - willitmod-dev-bc2/data/bitcoiniid/Dockerfile
+      - willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+      - willitmod-dev-bc2/umbrel-app.yml
   workflow_dispatch:
     inputs:
       mode:
@@ -41,7 +53,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pr-verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pull-request source without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release inputs and migration state machine
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "${BASE_SHA}^{commit}"
+          sh -n willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+          sh -n scripts/validate-axebc2-v31-release.sh
+          sh -n scripts/test-bitcoinii-wrapper.sh
+          shellcheck \
+            willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
+            scripts/validate-axebc2-v31-release.sh \
+            scripts/test-bitcoinii-wrapper.sh
+          scripts/validate-axebc2-v31-release.sh 31.1.0 true
+          scripts/test-bitcoinii-wrapper.sh
+          git diff --check "$BASE_SHA"...HEAD
+
   validate:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -92,7 +136,7 @@ jobs:
           scripts/validate-axebc2-v31-release.sh "$CORE_VERSION" "$OFFICIAL_NETWORK_ONLY"
 
   test:
-    if: inputs.mode == 'build-candidate'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'build-candidate'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -119,7 +163,7 @@ jobs:
           scripts/test-bitcoinii-wrapper.sh
 
   build:
-    if: inputs.mode == 'build-candidate'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'build-candidate'
     needs: [validate, test]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
@@ -142,6 +186,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.26.2@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa
 
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
@@ -415,7 +463,7 @@ jobs:
           retention-days: 30
 
   manifest:
-    if: inputs.mode == 'build-candidate'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'build-candidate'
     needs: [validate, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -432,6 +480,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.26.2@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa
 
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
@@ -548,7 +600,7 @@ jobs:
           retention-days: 30
 
   promote:
-    if: inputs.mode == 'promote'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'promote'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -566,6 +618,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.30.1
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.26.2@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa
 
       - name: Login to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9

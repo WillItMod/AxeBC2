@@ -78,6 +78,9 @@ if grep -Fq 'image: ghcr.io/willitmod/bitcoinii-core:31.1.0' "$compose_file"; th
 fi
 
 test -s "$workflow"
+grep -Fq "pull_request:" "$workflow"
+grep -Fq "pr-verify:" "$workflow"
+grep -Fq "if: github.event_name == 'workflow_dispatch'" "$workflow"
 if unpinned_actions="$(grep -E '^[[:space:]]+uses:' "$workflow" | grep -Ev '@[0-9a-f]{40}$' || true)" && [ -n "$unpinned_actions" ]; then
   echo "Every workflow action must be pinned to a full commit SHA:" >&2
   echo "$unpinned_actions" >&2
@@ -96,6 +99,9 @@ fi
 grep -Fq 'push-by-digest=true' "$workflow"
 grep -Fq 'provenance: mode=max' "$workflow"
 grep -Fq 'sbom: true' "$workflow"
+test "$(grep -Fc 'uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f' "$workflow")" -eq 3
+test "$(grep -Fc 'version: v0.30.1' "$workflow")" -eq 3
+test "$(grep -Fc 'image=docker.io/moby/buildkit:v0.26.2@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa' "$workflow")" -eq 3
 grep -Fq 'Refusing to overwrite existing candidate tag' "$workflow"
 grep -Fq 'Refusing to overwrite existing stable tag' "$workflow"
 grep -Fq "git merge-base --is-ancestor \"\$SOURCE_REVISION\" \"\$main_revision\"" "$workflow"
