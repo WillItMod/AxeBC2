@@ -1,0 +1,689 @@
+name: Publish BitcoinII Core image
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Build a commit-bound candidate or promote its tested digest
+        required: true
+        type: choice
+        options:
+          - build-candidate
+          - promote
+        default: build-candidate
+      core_version:
+        description: Final BitcoinII Core image tag
+        required: true
+        default: 31.1.0
+      core_digest:
+        description: Tested multi-architecture Core digest (promotion only)
+        required: false
+        default: ""
+      source_revision:
+        description: Full public AxeBC2 source commit SHA (promotion only)
+        required: false
+        default: ""
+      official_bitcoinii_network_only:
+        description: Confirm unmodified official Core is for the BitcoinII network only
+        required: true
+        type: boolean
+        default: false
+      promotion_approved:
+        description: DEV verification of this exact digest is complete
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: bitcoinii-core-${{ inputs.mode }}-${{ inputs.core_version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      candidate_tag: ${{ steps.release.outputs.candidate_tag }}
+      short_sha: ${{ steps.release.outputs.short_sha }}
+    steps:
+      - name: Checkout public release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - id: release
+        name: Validate immutable Core release inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          CORE_VERSION: ${{ inputs.core_version }}
+          CORE_DIGEST: ${{ inputs.core_digest }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          OFFICIAL_NETWORK_ONLY: ${{ inputs.official_bitcoinii_network_only }}
+          PROMOTION_APPROVED: ${{ inputs.promotion_approved }}
+        run: |
+          set -Eeuo pipefail
+          test "$CORE_VERSION" = "31.1.0"
+          test "$OFFICIAL_NETWORK_ONLY" = "true"
+
+          release_sha="$GITHUB_SHA"
+          case "$MODE" in
+            build-candidate)
+              test -z "$CORE_DIGEST"
+              test -z "$SOURCE_REVISION"
+              test "$PROMOTION_APPROVED" = "false"
+              ;;
+            promote)
+              test "$PROMOTION_APPROVED" = "true"
+              [[ "$CORE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+              [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+              release_sha="$SOURCE_REVISION"
+              ;;
+            *)
+              echo "Unsupported release mode: $MODE" >&2
+              exit 2
+              ;;
+          esac
+
+          short_sha="${release_sha:0:12}"
+          echo "short_sha=$short_sha" >>"$GITHUB_OUTPUT"
+          echo "candidate_tag=${CORE_VERSION}-rc.${short_sha}" >>"$GITHUB_OUTPUT"
+          scripts/validate-axebc2-v31-release.sh "$CORE_VERSION" "$OFFICIAL_NETWORK_ONLY"
+
+  test:
+    if: inputs.mode == 'build-candidate'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout public release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate shell and migration state machine
+        env:
+          CORE_VERSION: ${{ inputs.core_version }}
+          OFFICIAL_NETWORK_ONLY: ${{ inputs.official_bitcoinii_network_only }}
+        run: |
+          set -Eeuo pipefail
+          sh -n willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+          sh -n scripts/validate-axebc2-v31-release.sh
+          sh -n scripts/test-bitcoinii-wrapper.sh
+          shellcheck \
+            willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
+            scripts/validate-axebc2-v31-release.sh \
+            scripts/test-bitcoinii-wrapper.sh
+          scripts/validate-axebc2-v31-release.sh "$CORE_VERSION" "$OFFICIAL_NETWORK_ONLY"
+          scripts/test-bitcoinii-wrapper.sh
+
+  build:
+    if: inputs.mode == 'build-candidate'
+    needs: [validate, test]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout public release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: identity
+        name: Resolve image identity
+        env:
+          CORE_VERSION: ${{ inputs.core_version }}
+        run: |
+          set -Eeuo pipefail
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitcoinii-core" >>"$GITHUB_OUTPUT"
+          echo "version=$CORE_VERSION" >>"$GITHUB_OUTPUT"
+
+      - id: build
+        name: Build and push the native image by digest
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: willitmod-dev-bc2/data/bitcoiniid
+          file: willitmod-dev-bc2/data/bitcoiniid/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ steps.identity.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=bitcoinii-core-31.1.0-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=bitcoinii-core-31.1.0-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.identity.outputs.version }}
+
+      - name: Verify the native artifact by exact digest
+        env:
+          IMAGE: ${{ steps.identity.outputs.image }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -Eeuo pipefail
+          ref="${IMAGE}@${DIGEST}"
+          container="bitcoinii-core-smoke-${ARCH}"
+          restart_container="${container}-restart"
+          test_data="$(mktemp -d)"
+          chmod 0777 "$test_data"
+          cleanup() {
+            docker rm -f "$container" "$restart_container" >/dev/null 2>&1 || true
+            rm -rf "$test_data"
+          }
+          trap cleanup EXIT
+
+          docker pull --platform "$PLATFORM" "$ref"
+          test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = "$PLATFORM"
+          test "$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$GITHUB_REPOSITORY"
+          test "$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          docker run --rm "$ref" --version | grep -Eq 'v31\.1\.0([^0-9]|$)'
+          docker run --rm --entrypoint /bin/sh "$ref" -ec '
+            test -x /usr/local/bin/bitcoinII-d
+            test -x /usr/local/bin/bitcoinII-cli
+            test -x /usr/local/bin/bitcoinIId-wrapper.sh
+            test -s /usr/share/doc/bitcoinii-core/COPYING
+            test -s /usr/share/doc/bitcoinii-core/README.md
+            test -s /usr/share/doc/bitcoinii-core/src/pow.cpp
+            jq --version >/dev/null
+          '
+
+          printf '%s\n' \
+            '{"schema":1,"migration":"bitcoinii-shockwave-core31-full-reindex","minimum_core_major":31,"activation_height":57750}' \
+            >"$test_data/.core31-full-reindex-required.json"
+          touch "$test_data/.reindex" "$test_data/.reindex-chainstate"
+
+          # A startup failure before the pinned Core acceptance point must not
+          # consume either app request or claim that migration has started.
+          set +e
+          docker run --rm \
+            --user 1000:1000 \
+            --mount "type=bind,source=$test_data,target=/data" \
+            "$ref" \
+            -datadir=/data \
+            -regtest=1 \
+            -definitely-invalid-option=1 \
+            >"$test_data/preaccept-failure.log" 2>&1
+          preaccept_status=$?
+          set -e
+          test "$preaccept_status" -ne 0
+          test -f "$test_data/.core31-full-reindex-required.json"
+          test -f "$test_data/.reindex"
+          test -f "$test_data/.reindex-chainstate"
+          test ! -e "$test_data/.core31-full-reindex-started.json"
+          grep -Fq 'Core exited before accepting the full reindex request; it will be retried' \
+            "$test_data/preaccept-failure.log"
+          if grep -Fq 'init message: Loading block index' \
+            "$test_data/.core31-reindex-bootstrap.log"; then
+            echo "Core reported acceptance during the intentionally failing launch" >&2
+            exit 1
+          fi
+
+          docker run -d --name "$container" \
+            --user 1000:1000 \
+            --mount "type=bind,source=$test_data,target=/data" \
+            "$ref" \
+            -datadir=/data \
+            -regtest=1 \
+            -server=1 \
+            -listen=0 \
+            -rpcuser=release-smoke \
+            -rpcpassword=release-smoke \
+            -rpcbind=127.0.0.1 \
+            -zmqpubhashblock=tcp://127.0.0.1:28336
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker exec --user 1000:1000 "$container" \
+              bitcoinII-cli -regtest -rpcuser=release-smoke -rpcpassword=release-smoke \
+              getblockchaininfo >blockchain.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if ! docker inspect "$container" --format '{{.State.Running}}' | grep -Fxq true; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          jq -e '.chain == "regtest" and .blocks == 0' blockchain.json >/dev/null
+          test -f "$test_data/.core31-full-reindex-required.json"
+          test -f "$test_data/.core31-full-reindex-started.json"
+          test ! -e "$test_data/.core31-full-reindex-complete.json"
+          test ! -e "$test_data/.reindex"
+          test ! -e "$test_data/.reindex-chainstate"
+          grep -Fq 'init message: Loading block index' \
+            "$test_data/.core31-reindex-bootstrap.log"
+          grep -Fq 'Command-line arg: reindex=""' \
+            "$test_data/.core31-reindex-bootstrap.log"
+          docker logs "$container" >"$test_data/first-wrapper.log" 2>&1
+          grep -Fq 'Core accepted and persisted the full reindex request' \
+            "$test_data/first-wrapper.log"
+
+          docker exec --user 1000:1000 "$container" \
+            bitcoinII-cli -regtest -rpcuser=release-smoke -rpcpassword=release-smoke \
+            createwallet release-smoke >/dev/null
+          docker exec --user 1000:1000 "$container" \
+            bitcoinII-cli -regtest -rpcuser=release-smoke -rpcpassword=release-smoke \
+            getwalletinfo | jq -e '.walletname == "release-smoke"' >/dev/null
+          docker exec --user 1000:1000 "$container" \
+            bitcoinII-cli -regtest -rpcuser=release-smoke -rpcpassword=release-smoke \
+            getzmqnotifications | jq -e 'any(.[]; .type == "pubhashblock")' >/dev/null
+          # Exercise the wrapper/Tini PID 1 path while the first supervised
+          # launch is still active. Core must receive TERM and shut down cleanly.
+          docker stop --time 20 "$container" >/dev/null
+
+          stopped=0
+          for attempt in $(seq 1 60); do
+            if ! docker inspect "$container" --format '{{.State.Running}}' | grep -Fxq true; then
+              stopped=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$stopped" -ne 1 ]; then
+            docker logs "$container"
+            echo "BitcoinII Core did not stop cleanly within 60 seconds" >&2
+            exit 1
+          fi
+          test "$(docker inspect "$container" --format '{{.State.ExitCode}}')" -eq 0
+          test "$(docker inspect "$container" --format '{{.State.OOMKilled}}')" = "false"
+
+          # The started marker means Core owns continuation state. Confirm a
+          # normal restart does not receive -reindex and reset that work.
+          docker run -d --name "$restart_container" \
+            --user 1000:1000 \
+            --mount "type=bind,source=$test_data,target=/data" \
+            "$ref" \
+            -datadir=/data \
+            -regtest=1 \
+            -server=1 \
+            -listen=0 \
+            -rpcuser=release-smoke \
+            -rpcpassword=release-smoke \
+            -rpcbind=127.0.0.1 \
+            -debuglogfile=/data/restart-debug.log \
+            -printtoconsole=0
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker exec --user 1000:1000 "$restart_container" \
+              bitcoinII-cli -datadir=/data -regtest \
+              -rpcuser=release-smoke -rpcpassword=release-smoke \
+              getblockchaininfo >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! docker inspect "$restart_container" --format '{{.State.Running}}' | grep -Fxq true; then
+              docker logs "$restart_container"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          docker logs "$restart_container" >"$test_data/restart-wrapper.log" 2>&1
+          grep -Fq 'mandatory Core 31 reindex already started; Core will resume its persisted reindex state' \
+            "$test_data/restart-wrapper.log"
+          if grep -Fq 'Command-line arg: reindex=' "$test_data/restart-debug.log"; then
+            echo "A started migration was incorrectly reset with -reindex" >&2
+            exit 1
+          fi
+          docker exec --user 1000:1000 "$restart_container" \
+            bitcoinII-cli -datadir=/data -regtest \
+            -rpcuser=release-smoke -rpcpassword=release-smoke \
+            stop >/dev/null
+
+          stopped=0
+          for attempt in $(seq 1 60); do
+            if ! docker inspect "$restart_container" --format '{{.State.Running}}' | grep -Fxq true; then
+              stopped=1
+              break
+            fi
+            sleep 1
+          done
+          test "$stopped" -eq 1
+          test "$(docker inspect "$restart_container" --format '{{.State.ExitCode}}')" -eq 0
+          test "$(docker inspect "$restart_container" --format '{{.State.OOMKilled}}')" = "false"
+          test -f "$test_data/.core31-full-reindex-required.json"
+          test -f "$test_data/.core31-full-reindex-started.json"
+
+          mkdir -p release-evidence
+          cp "$test_data/preaccept-failure.log" \
+            "release-evidence/core-${ARCH}-preaccept-failure.log"
+          cp "$test_data/.core31-reindex-bootstrap.log" \
+            "release-evidence/core-${ARCH}-accepted-reindex.log"
+          cp "$test_data/first-wrapper.log" \
+            "release-evidence/core-${ARCH}-first-wrapper.log"
+          cp "$test_data/restart-debug.log" \
+            "release-evidence/core-${ARCH}-restart.log"
+          cp "$test_data/restart-wrapper.log" \
+            "release-evidence/core-${ARCH}-restart-wrapper.log"
+          cp "$test_data/.core31-full-reindex-started.json" \
+            "release-evidence/migration-${ARCH}-started-marker.json"
+
+      - name: Record architecture digest
+        env:
+          IMAGE: ${{ steps.identity.outputs.image }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p release-evidence
+          jq -n \
+            --arg image "$IMAGE" \
+            --arg version "$VERSION" \
+            --arg architecture "$ARCH" \
+            --arg digest "$DIGEST" \
+            --arg revision "$GITHUB_SHA" \
+            --arg upstream_revision "8daaf7b12e71d3646eed787f040bf2899a69dc1c" \
+            '{image:$image,version:$version,component:"bitcoinii-core",architecture:$architecture,digest:$digest,revision:$revision,upstreamRevision:$upstream_revision}' \
+            >"release-evidence/core-${ARCH}.json"
+
+      - name: Upload architecture evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-digest-bitcoinii-core-${{ matrix.arch }}
+          path: release-evidence/*
+          if-no-files-found: error
+          retention-days: 30
+
+  manifest:
+    if: inputs.mode == 'build-candidate'
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      packages: write
+    steps:
+      - name: Download architecture evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: image-digest-bitcoinii-core-*
+          path: release-evidence
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: publish
+        name: Create and verify the commit-bound candidate manifest
+        env:
+          CORE_VERSION: ${{ inputs.core_version }}
+          CANDIDATE_TAG: ${{ needs.validate.outputs.candidate_tag }}
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitcoinii-core"
+          candidate="${image}:${CANDIDATE_TAG}"
+
+          if inspect_output="$(docker buildx imagetools inspect "$candidate" 2>&1)"; then
+            echo "Refusing to overwrite existing candidate tag: $candidate" >&2
+            exit 1
+          elif [[ "$inspect_output" != *": not found" ]]; then
+            echo "Registry inspection failed closed for $candidate:" >&2
+            echo "$inspect_output" >&2
+            exit 1
+          fi
+
+          test "$(find release-evidence -type f -name 'core-*.json' | wc -l | tr -d ' ')" -eq 2
+          jq -s -e --arg image "$image" --arg version "$CORE_VERSION" --arg revision "$GITHUB_SHA" '
+            length == 2 and all(.[];
+              .image == $image and
+              .version == $version and
+              .component == "bitcoinii-core" and
+              .revision == $revision and
+              .upstreamRevision == "8daaf7b12e71d3646eed787f040bf2899a69dc1c" and
+              (.architecture == "amd64" or .architecture == "arm64") and
+              (.digest | test("^sha256:[0-9a-f]{64}$"))
+            )
+          ' release-evidence/core-*.json >/dev/null
+          test "$(jq -rs '[.[].architecture] | unique | length' release-evidence/core-*.json)" -eq 2
+          test "$(jq -rs '[.[].digest] | unique | length' release-evidence/core-*.json)" -eq 2
+
+          mapfile -t sources < <(jq -r '.image + "@" + .digest' release-evidence/core-*.json)
+          test "${#sources[@]}" -eq 2
+          docker buildx imagetools create --tag "$candidate" "${sources[@]}"
+
+          docker buildx imagetools inspect "$candidate" --format '{{json .Manifest}}' >manifest.json
+          test "$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length' manifest.json)" -eq 1
+          test "$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length' manifest.json)" -eq 1
+          test "$(jq '[.manifests[] | select(.platform.os != "unknown")] | length' manifest.json)" -eq 2
+
+          docker buildx imagetools inspect "$candidate" --format '{{json .Provenance}}' >provenance.json
+          docker buildx imagetools inspect "$candidate" --format '{{json .SBOM}}' >sbom.json
+          jq -e --arg revision "$GITHUB_SHA" --arg source "https://github.com/$GITHUB_REPOSITORY" '
+            .["linux/amd64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            .["linux/arm64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            .["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
+            .["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
+            (.["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source and
+            (.["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source
+          ' provenance.json >/dev/null
+          jq -e '
+            ((.["linux/amd64"] // {}) | type == "object" and length > 0) and
+            ((.["linux/arm64"] // {}) | type == "object" and length > 0)
+          ' sbom.json >/dev/null
+
+          digest="$(jq -r '.digest' manifest.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n \
+            --arg image "$image" \
+            --arg candidate_tag "$CANDIDATE_TAG" \
+            --arg version "$CORE_VERSION" \
+            --arg digest "$digest" \
+            --arg revision "$GITHUB_SHA" \
+            --arg upstream_revision "8daaf7b12e71d3646eed787f040bf2899a69dc1c" \
+            '{image:$image,candidateTag:$candidate_tag,version:$version,digest:$digest,revision:$revision,upstreamRevision:$upstream_revision,platforms:["linux/amd64","linux/arm64"],provenance:true,sbom:true}' \
+            >release.json
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "### BitcoinII Core candidate: ${candidate}@${digest}" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Verify public anonymous pulls by exact candidate digest
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.candidate_tag }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitcoinii-core"
+          ref="${image}:${CANDIDATE_TAG}@${DIGEST}"
+          docker logout ghcr.io
+          for platform in linux/amd64 linux/arm64; do
+            pulled=0
+            for attempt in $(seq 1 6); do
+              if docker pull --platform "$platform" "$ref"; then
+                pulled=1
+                break
+              fi
+              sleep $((attempt * 2))
+            done
+            test "$pulled" -eq 1
+            test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = "$platform"
+            docker image rm "$ref" >/dev/null 2>&1 || true
+          done
+
+      - name: Upload candidate release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-bitcoinii-core-${{ needs.validate.outputs.short_sha }}
+          path: |
+            release.json
+            manifest.json
+            provenance.json
+            sbom.json
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    if: inputs.mode == 'promote'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: axebc2-production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout the exact candidate source revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: promote
+        name: Validate and promote the tested digest without rebuilding
+        env:
+          CORE_VERSION: ${{ inputs.core_version }}
+          CORE_DIGEST: ${{ inputs.core_digest }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          CANDIDATE_TAG: ${{ needs.validate.outputs.candidate_tag }}
+          OFFICIAL_NETWORK_ONLY: ${{ inputs.official_bitcoinii_network_only }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          origin_url="$(git remote get-url origin)"
+          test "${origin_url%.git}" = "https://github.com/$GITHUB_REPOSITORY"
+          git fetch --no-tags --force origin \
+            refs/heads/main:refs/remotes/origin/main
+          main_revision="$(git rev-parse --verify refs/remotes/origin/main^{commit})"
+          if ! git merge-base --is-ancestor "$SOURCE_REVISION" "$main_revision"; then
+            echo "Candidate source revision is not an ancestor of owner main" >&2
+            exit 1
+          fi
+          scripts/validate-axebc2-v31-release.sh "$CORE_VERSION" "$OFFICIAL_NETWORK_ONLY"
+
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitcoinii-core"
+          source="${image}@${CORE_DIGEST}"
+          candidate="${image}:${CANDIDATE_TAG}"
+          target="${image}:${CORE_VERSION}"
+
+          docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' >manifest.json
+          test "$(jq -r '.digest' manifest.json)" = "$CORE_DIGEST"
+          test "$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length' manifest.json)" -eq 1
+          test "$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length' manifest.json)" -eq 1
+          test "$(jq '[.manifests[] | select(.platform.os != "unknown")] | length' manifest.json)" -eq 2
+
+          docker buildx imagetools inspect "$source" --format '{{json .Provenance}}' >provenance.json
+          docker buildx imagetools inspect "$source" --format '{{json .SBOM}}' >sbom.json
+          jq -e --arg revision "$SOURCE_REVISION" --arg source_url "https://github.com/$GITHUB_REPOSITORY" '
+            .["linux/amd64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            .["linux/arm64"].SLSA.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            .["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
+            .["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.revision == $revision and
+            (.["linux/amd64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source_url and
+            (.["linux/arm64"].SLSA.runDetails.metadata.buildkit_metadata.vcs.source | sub("\\.git$"; "")) == $source_url
+          ' provenance.json >/dev/null
+          jq -e '
+            ((.["linux/amd64"] // {}) | type == "object" and length > 0) and
+            ((.["linux/arm64"] // {}) | type == "object" and length > 0)
+          ' sbom.json >/dev/null
+
+          docker buildx imagetools inspect "$candidate" --format '{{json .Manifest}}' >candidate.json
+          test "$(jq -r '.digest' candidate.json)" = "$CORE_DIGEST"
+
+          if inspect_output="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' 2>&1)"; then
+            echo "Refusing to overwrite existing stable tag: $target" >&2
+            echo "$inspect_output" >&2
+            exit 1
+          elif [[ "$inspect_output" != *": not found" ]]; then
+            echo "Registry inspection failed closed for $target:" >&2
+            echo "$inspect_output" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create --tag "$target" "$source"
+          docker buildx imagetools inspect "$target" --format '{{json .Manifest}}' >stable.json
+          test "$(jq -r '.digest' stable.json)" = "$CORE_DIGEST"
+
+          jq -n \
+            --arg image "$image" \
+            --arg tag "$CORE_VERSION" \
+            --arg candidate_tag "$CANDIDATE_TAG" \
+            --arg digest "$CORE_DIGEST" \
+            --arg revision "$SOURCE_REVISION" \
+            --arg upstream_revision "8daaf7b12e71d3646eed787f040bf2899a69dc1c" \
+            '{image:$image,tag:$tag,candidateTag:$candidate_tag,digest:$digest,revision:$revision,upstreamRevision:$upstream_revision,promotedWithoutRebuild:true,platforms:["linux/amd64","linux/arm64"],provenance:true,sbom:true}' \
+            >promotion.json
+          echo "digest=$CORE_DIGEST" >>"$GITHUB_OUTPUT"
+          echo "### BitcoinII Core stable: ${target}@${CORE_DIGEST}" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the stable tag is anonymously pullable at the exact digest
+        env:
+          CORE_VERSION: ${{ inputs.core_version }}
+          CORE_DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bitcoinii-core"
+          ref="${image}:${CORE_VERSION}@${CORE_DIGEST}"
+          docker logout ghcr.io
+          for platform in linux/amd64 linux/arm64; do
+            pulled=0
+            for attempt in $(seq 1 6); do
+              if docker pull --platform "$platform" "$ref"; then
+                pulled=1
+                break
+              fi
+              sleep $((attempt * 2))
+            done
+            test "$pulled" -eq 1
+            test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = "$platform"
+            docker image rm "$ref" >/dev/null 2>&1 || true
+          done
+
+      - name: Upload promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: promotion-bitcoinii-core-${{ needs.validate.outputs.short_sha }}
+          path: |
+            promotion.json
+            manifest.json
+            provenance.json
+            sbom.json
+            candidate.json
+            stable.json
+          if-no-files-found: error
+          retention-days: 30
