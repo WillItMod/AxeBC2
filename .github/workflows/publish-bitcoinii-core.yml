@@ -238,9 +238,31 @@ jobs:
           restart_container="${container}-restart"
           test_data="$(mktemp -d)"
           chmod 0777 "$test_data"
+          make_test_data_readable() {
+            docker run --rm \
+              --network none \
+              --read-only \
+              --security-opt no-new-privileges \
+              --user 0:0 \
+              --entrypoint /bin/chmod \
+              --mount "type=bind,source=$test_data,target=/evidence" \
+              "$ref" \
+              -R a+rX /evidence
+          }
           cleanup() {
             docker rm -f "$container" "$restart_container" >/dev/null 2>&1 || true
-            rm -rf "$test_data"
+            if [ -d "$test_data" ]; then
+              docker run --rm \
+                --network none \
+                --read-only \
+                --security-opt no-new-privileges \
+                --user 0:0 \
+                --entrypoint /bin/chmod \
+                --mount "type=bind,source=$test_data,target=/cleanup" \
+                "$ref" \
+                -R a+rwX /cleanup >/dev/null 2>&1 || true
+              rm -rf -- "$test_data" || true
+            fi
           }
           trap cleanup EXIT
 
@@ -364,6 +386,8 @@ jobs:
 
           # The started marker means Core owns continuation state. Confirm a
           # normal restart does not receive -reindex and reset that work.
+          : >"$test_data/restart-debug.log"
+          chmod 0666 "$test_data/restart-debug.log"
           docker run -d --name "$restart_container" \
             --user 1000:1000 \
             --mount "type=bind,source=$test_data,target=/data" \
@@ -397,6 +421,7 @@ jobs:
           docker logs "$restart_container" >"$test_data/restart-wrapper.log" 2>&1
           grep -Fq 'mandatory Core 31 reindex already started; Core will resume its persisted reindex state' \
             "$test_data/restart-wrapper.log"
+          test -r "$test_data/restart-debug.log"
           if grep -Fq 'Command-line arg: reindex=' "$test_data/restart-debug.log"; then
             echo "A started migration was incorrectly reset with -reindex" >&2
             exit 1
@@ -419,6 +444,17 @@ jobs:
           test "$(docker inspect "$restart_container" --format '{{.State.OOMKilled}}')" = "false"
           test -f "$test_data/.core31-full-reindex-required.json"
           test -f "$test_data/.core31-full-reindex-started.json"
+
+          # Core runs as UID 1000 while GitHub-hosted runners use a different
+          # host UID. Make all stopped-container evidence readable through a
+          # tightly scoped root helper before host-side assertions and copies.
+          make_test_data_readable
+          test -r "$test_data/preaccept-failure.log"
+          test -r "$test_data/.core31-reindex-bootstrap.log"
+          test -r "$test_data/first-wrapper.log"
+          test -r "$test_data/restart-debug.log"
+          test -r "$test_data/restart-wrapper.log"
+          test -r "$test_data/.core31-full-reindex-started.json"
 
           mkdir -p release-evidence
           cp "$test_data/preaccept-failure.log" \

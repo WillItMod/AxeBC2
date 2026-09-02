@@ -107,6 +107,13 @@ grep -Fq 'Refusing to overwrite existing stable tag' "$workflow"
 grep -Fq "git merge-base --is-ancestor \"\$SOURCE_REVISION\" \"\$main_revision\"" "$workflow"
 grep -Fq 'environment: axebc2-production' "$workflow"
 grep -Fq "docker stop --time 20 \"\$container\"" "$workflow"
+grep -Fq 'make_test_data_readable' "$workflow"
+grep -Fq ": >\"\$test_data/restart-debug.log\"" "$workflow"
+grep -Fq "chmod 0666 \"\$test_data/restart-debug.log\"" "$workflow"
+grep -Fq "test -r \"\$test_data/.core31-full-reindex-started.json\"" "$workflow"
+grep -Fq "mount \"type=bind,source=\$test_data,target=/cleanup\"" "$workflow"
+test "$(grep -Fc -- '--read-only' "$workflow")" -eq 2
+test "$(grep -Fc -- '--security-opt no-new-privileges' "$workflow")" -eq 2
 grep -Fq 'docker logout ghcr.io' "$workflow"
 grep -Fq 'ubuntu-24.04-arm' "$workflow"
 
