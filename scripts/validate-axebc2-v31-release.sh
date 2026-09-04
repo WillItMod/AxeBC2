@@ -7,6 +7,15 @@ expected_core_commit="8daaf7b12e71d3646eed787f040bf2899a69dc1c"
 expected_snapshot="20260830T000000Z"
 expected_scope="official-bitcoinii-network"
 expected_migration="bitcoinii-shockwave-core31-full-reindex"
+expected_app_version="0.1.10-dev"
+expected_app_tag="0.1.10-candidate.6e4ef58218e8"
+expected_app_commit="6e4ef58218e8cd5a4d1113196f9872a7f501f52e"
+expected_app_digest="sha256:b7ba2df2f48389d145ad18a927b099f32b5aa7708a0ea617a1b04e25c8e7f961"
+expected_core_candidate="31.1.0-rc.cdf44542dde2"
+expected_core_pipeline_commit="cdf44542dde255648008249d187fafc15f3a2f09"
+expected_core_digest="sha256:8875917ece57668fe9925d40a256ce8d429a3071511bb555d4ace1fa4370afc6"
+expected_ckpool_digest="sha256:8a9a7f10c8138d0f55533132ee7710a06715a42a49f75efb39be3350ada4fa6e"
+expected_os_bundle="11a35e68ab169eb0446485992a57b33fae018a92020b7d86bbf9a005571377af"
 
 core_version="${1:-}"
 official_network_only="${2:-false}"
@@ -20,6 +29,10 @@ dockerfile="$recipe_dir/data/bitcoiniid/Dockerfile"
 wrapper="$recipe_dir/data/bitcoiniid/bitcoinIId-wrapper.sh"
 compose_file="$recipe_dir/docker-compose.yml"
 manifest_file="$recipe_dir/umbrel-app.yml"
+init_script="$recipe_dir/data/init/init.sh"
+node_template="$recipe_dir/data/templates/bitcoinII.conf.template"
+release_record="$recipe_dir/CORE31-DEV-RELEASE.md"
+acceptance_evidence="$recipe_dir/DEV-ACCEPTANCE-EVIDENCE.json"
 workflow="$repo_root/.github/workflows/publish-bitcoinii-core.yml"
 
 if [ "$core_version" != "$expected_core_version" ]; then
@@ -67,15 +80,81 @@ if grep -Eq 'rm -f .*migration_required|rm -f .*core31-full-reindex-required' "$
   exit 1
 fi
 
-# Phase 1 publishes only the immutable Core candidate. Protect the live recipe
-# from accidentally pointing at an image that has not completed DEV acceptance.
-grep -Fq 'image: ghcr.io/willitmod/bitcoinii-core:29.1.0' "$compose_file"
-grep -Fq 'image: ghcr.io/willitmod/axebc2-app-umbrel-dev:0.1.7' "$compose_file"
-grep -Fq 'version: "0.1.7-dev"' "$manifest_file"
-if grep -Fq 'image: ghcr.io/willitmod/bitcoinii-core:31.1.0' "$compose_file"; then
-  echo "Phase 1 must not change the live recipe to Core 31" >&2
+# The public recipe mirrors the exact DEV candidate that completed live
+# acceptance. MAIN retags these same tested digests without rebuilding them.
+app_ref="ghcr.io/willitmod/axebc2-app-umbrel-dev:${expected_app_tag}@${expected_app_digest}"
+core_ref="ghcr.io/willitmod/bitcoinii-core:${expected_core_candidate}@${expected_core_digest}"
+ckpool_ref="ghcr.io/willitmod/docker-ckpool-solo:590fb2a@${expected_ckpool_digest}"
+alpine_ref="alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1"
+
+test "$(grep -Fc "$app_ref" "$compose_file")" -eq 1
+test "$(grep -Fc "$core_ref" "$compose_file")" -eq 2
+test "$(grep -Fc "$ckpool_ref" "$compose_file")" -eq 2
+test "$(grep -Fc "$alpine_ref" "$compose_file")" -eq 1
+grep -Fq "version: \"$expected_app_version\"" "$manifest_file"
+grep -Fq 'Requires 5tratumOS 0.7.12 or newer' "$manifest_file"
+grep -Fq 'nodes must perform a full reindex' "$manifest_file"
+grep -Fq 'APP_CHANNEL: "ALPHA"' "$compose_file"
+grep -Fq 'APP_VERSION_SUFFIX: "-dev"' "$compose_file"
+grep -Fq 'SUPPORT_CHECKIN_ENABLED: "false"' "$compose_file"
+grep -Fq '"2345:3333/tcp"' "$compose_file"
+test "$(grep -Fc 'create_host_path: false' "$compose_file")" -eq 9
+if grep -Eq '^[[:space:]]+-[[:space:]]+"?8338:' "$compose_file"; then
+  echo "The BitcoinII P2P port must remain outbound-only" >&2
   exit 1
 fi
+
+test -s "$init_script"
+test -s "$node_template"
+test -s "$release_record"
+test -s "$acceptance_evidence"
+sh -n "$init_script"
+grep -Fq 'minimum_os="0.7.12"' "$init_script"
+grep -Fq 'minimum_app="0.1.10"' "$init_script"
+grep -Fq '.5tratumos-rollback-policy.json' "$init_script"
+grep -Fq '.core31-full-reindex-required.json' "$init_script"
+grep -Fq "$expected_migration" "$init_script"
+grep -Fq 'natpmp=0' "$init_script"
+grep -Fq 'natpmp=0' "$node_template"
+if grep -Fq 'upnp=1' "$node_template"; then
+  echo "The released node template must not enable UPnP" >&2
+  exit 1
+fi
+
+grep -Fq "$expected_app_commit" "$release_record"
+grep -Fq "$expected_core_pipeline_commit" "$release_record"
+grep -Fq 'Live DEV acceptance' "$release_record"
+jq -e \
+  --arg app_version "$expected_app_version" \
+  --arg app_digest "$expected_app_digest" \
+  --arg app_revision "$expected_app_commit" \
+  --arg core_digest "$expected_core_digest" \
+  --arg core_revision "$expected_core_pipeline_commit" \
+  --arg os_bundle "$expected_os_bundle" '
+    .schema == 1 and .result == "passed" and
+    .app_version == $app_version and .app_digest == $app_digest and
+    .source_revision == $app_revision and .core_digest == $core_digest and
+    .core_source_revision == $core_revision and
+    .tested_os_version == "v0.7.12-dev" and
+    .tested_os_bundle_sha256 == $os_bundle and
+    .acceptance.core_version == 310100 and
+    .acceptance.migration_required_marker_absent == true and
+    .acceptance.migration_started_marker_valid == true and
+    .acceptance.migration_complete_marker_valid == true and
+    .acceptance.checkpoint_height == 57752 and
+    .acceptance.verifychain_level == 4 and
+    .acceptance.verifychain_passed == true and
+    .acceptance.payout_preserved == true and
+    .acceptance.pool_stratum_result == "passed" and
+    .acceptance.app_ui_privacy_passed == true and
+    .acceptance.telemetry_disabled == true and
+    .acceptance.p2p_port_unpublished == true and
+    .acceptance.natpmp_disabled == true and
+    .acceptance.post_completion_restart_passed == true and
+    .acceptance.reindex_not_repeated == true and
+    .acceptance.app_rollback_rejected == true and
+    .acceptance.os_rollback_rejected == true
+  ' "$acceptance_evidence" >/dev/null
 
 test -s "$workflow"
 grep -Fq "pull_request:" "$workflow"
@@ -139,4 +218,4 @@ test "$(grep -Fc -- '--security-opt no-new-privileges' "$workflow")" -eq 2
 grep -Fq 'docker logout ghcr.io' "$workflow"
 grep -Fq 'ubuntu-24.04-arm' "$workflow"
 
-echo "AxeBC2 BitcoinII Core $expected_core_version phase-1 release inputs are consistent"
+echo "AxeBC2 $expected_app_version / BitcoinII Core $expected_core_version public release inputs are consistent"
