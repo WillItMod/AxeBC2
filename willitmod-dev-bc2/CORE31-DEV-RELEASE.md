@@ -1,81 +1,80 @@
-# AxeBC2 Core 31 DEV release gates
+# AxeBC2 0.1.11 / Core 31 public release gates
 
-The DEV recipe maps store ID `willitmod-dev-bc2` to canonical 5tratumOS app ID
-`axebc2`. Its preserved data path is `/var/lib/5tratumos/apps/axebc2`, matching
-the `app_id` in `.5tratumos-rollback-policy.json`.
+The public recipe mirrors the DEV store ID `willitmod-dev-bc2`, which maps to
+canonical 5tratumOS app ID `axebc2`. Its preserved data path is
+`/var/lib/5tratumos/apps/axebc2`, matching the `app_id` in
+`.5tratumos-rollback-policy.json`. The protected consensus rollback floor remains
+`0.1.10`; this application-only maintenance release must not change that floor
+or repeat the completed Core 31 reindex.
 
-Every host bind uses `create_host_path: false`. The recipe contains the empty
-runtime directories that 5tratumOS stages before Compose validation, so Docker
-must not silently create a misspelled or missing source path.
+Every host bind uses `create_host_path: false`. The recipe contains the runtime
+directories staged before Compose validation, so Docker must not silently create
+a misspelled or missing source path. The digest-pinned Alpine init container's
+dependency installation still fails before persistent data mutation if its
+repositories are unavailable.
 
-The digest-pinned generic Alpine init container installs `jq` and
-`gettext-envsubst` from Alpine 3.22 repositories at startup. This remains a
-network-availability dependency, but an install failure occurs before any
-persistent app-data or node-data mutation and prevents Core from starting. A
-future dedicated, independently built and digest-pinned init image could remove
-that availability dependency; it is not introduced in this consensus release.
+## Immutable release inputs
 
-The committed Compose file is finalized: it contains one immutable application
-sha256 pin and two identical immutable Core sha256 pins, with no digest
-sentinels. CI detects this as the strict `finalized` phase. The earlier
-`prefinalization` phase accepted exactly one `APP_CANDIDATE_DIGEST_REQUIRED` and
-two `CORE31_CANDIDATE_DIGEST_REQUIRED` occurrences; a partial or mixed state is
-rejected in either phase.
+The application candidate is pinned to
+`ghcr.io/willitmod/axebc2-app-umbrel-dev:0.1.11-candidate.ecf6e2c8cfd0@sha256:23a7962e223da5549eba52697c6f4cfa16ab74cba935c68c48148a4c515302b4`,
+built from source revision `ecf6e2c8cfd0e42ea53d3cc146b18cd6d4c4b563` by
+candidate workflow run `33895447789`. Promotion workflow run `33898645561`
+copied that exact multi-architecture digest to the DEV and MAIN application tags
+without rebuilding it.
 
-Finalization replaced those sentinels with the exact verified
-multi-architecture candidate digests. The merged platform Compose must pass
-validation, all images must pull anonymously by digest, init must complete
-successfully on 5tratumOS 0.7.12+, and the resulting installation must be
-tested on DEV before any production promotion.
+The already accepted BitcoinII Core 31 image remains pinned twice to
+`ghcr.io/willitmod/bitcoinii-core:31.1.0-rc.cdf44542dde2@sha256:8875917ece57668fe9925d40a256ce8d429a3071511bb555d4ace1fa4370afc6`.
+Its source revision is `cdf44542dde255648008249d187fafc15f3a2f09`, built by
+candidate workflow run `33675068951`. CKPool remains pinned twice to
+`ghcr.io/willitmod/docker-ckpool-solo:590fb2a@sha256:8a9a7f10c8138d0f55533132ee7710a06715a42a49f75efb39be3350ada4fa6e`.
 
-Run `scripts/finalize-axebc2-0.1.10-dev.sh` with the exact application index
-digest, exact Core candidate tag and exact Core index digest. The application
-candidate is fixed to `0.1.10-candidate.6e4ef58218e8` from source revision
-`6e4ef58218e8cd5a4d1113196f9872a7f501f52e`. The Core candidate is fixed to
-`31.1.0-rc.cdf44542dde2` from source revision
-`cdf44542dde255648008249d187fafc15f3a2f09`, candidate workflow run
-`33675068951`. Before editing Compose, the
-finalizer anonymously verifies candidate resolution, amd64 and arm64 manifests
-and pulls. It atomically replaces every sentinel and emits both exact source
-revisions in the evidence JSON template, which must be completed only after
-live DEV acceptance.
+The Core image compiles official BitcoinII Core `v31.1.0` at upstream commit
+`8daaf7b12e71d3646eed787f040bf2899a69dc1c` without patching ShockWave. The
+authorization and upstream notices remain recorded alongside the recipe.
 
-The test platform is also fixed to the published DEV-only
-[`v0.7.12-dev`](https://github.com/WillItMod/5tratum/releases/tag/v0.7.12-dev)
-bundle with SHA-256
+The test platform remains fixed to the DEV-only `v0.7.12-dev` bundle with
+SHA-256
 `11a35e68ab169eb0446485992a57b33fae018a92020b7d86bbf9a005571377af`.
-The finalizer writes that exact value into the acceptance template; it is not a
-free-form observation. MAIN promotion rejects evidence from a different OS
-bundle even when the displayed version string is the same.
 
-The store validator exercises a pinned copy of the relevant 5tratumOS
-materialization contract from platform commit `4f979cb9541622c1fdccdf43b8a885bbf845ba38`:
-it consumes `app_proxy`, publishes the manifest port on the resolved app
-service, removes the legacy shared network, and normalizes restart policies.
-The platform currently exposes this logic only inside its mutating install and
-update commands, so invoking the live implementation from isolated store CI
-would require performing a stateful platform transaction. Final DEV acceptance
-therefore still runs the real platform materializer and validates its generated
-Compose file before containers are started.
+The accepted package is bound to DEV store commit
+`249ab61506dc09c2151d39e2b210f5f18d75ff21`. Its exact Compose SHA-256 is
+`93ceba92069947f47d650a5fb32205836fe070d83707f36912a2e0e83beb1244`;
+the public recipe is required to match those Compose bytes.
 
-## Live DEV acceptance
+## Retained Core 31 acceptance
 
-The exact finalized candidate was accepted on `10.10.10.235` using the pinned
-5tratumOS `v0.7.12-dev` bundle on 2026-09-04. The mandatory Core 31 full reindex
-completed, its protected migration markers validated, and a subsequent full app
-restart did not repeat the reindex. Core reported version `310100`, completed a
-level-4 `verifychain`, and matched the official BitcoinII explorer at height
-58,433 and block hash
-`0000000000000001077a5ea39eefb3a44e5d88357c723f56484840a7f89c5554`.
+The unchanged Core digest previously completed its mandatory full reindex and
+protected migration-marker checks on `10.10.10.235`. A subsequent full restart
+did not repeat the reindex. Core reported version `310100`, passed level-4
+`verifychain`, matched the official BitcoinII explorer, maintained at least
+three outbound Core 31 peers, and had no competing valid tip at or beyond the
+ShockWave checkpoint.
 
-Five outbound BitcoinII Core 31 peers were observed. Six historical one-block
-header branches ended between heights 53,093 and 53,209, all before the
-ShockWave checkpoint; no non-active valid tip existed at or beyond checkpoint
-height 57,752, so the recorded number of competing valid tips is zero.
+## Live 0.1.11 DEV acceptance
 
-The non-submitting Stratum probe received subscribe, authorize, difficulty and
-job notifications. The configured payout was compared using a private HMAC and
-remained unchanged. The UI/privacy checks, telemetry and port-exposure checks,
-post-completion restart, app rollback rejection and OS rollback rejection all
-passed. All 39 unrelated application containers retained their preflight image
-and container identifiers.
+The exact application candidate and corrected DEV recipe were installed and
+accepted on `10.10.10.235` at `2026-09-04T17:22:22Z`. The node remained on mainnet,
+fully synchronized at height 58,444, and matched the official BitcoinII explorer
+at block hash
+`00000000000000001e6ee54b268e62f3f1306a04cdb8f08a30c712e3e1cc3996`.
+Core 31 reported version `310100`, retained valid migration markers and minimum
+chainwork, passed level-4 `verifychain`, maintained at least three outbound Core
+31 peers, and had no competing valid tip at or beyond the ShockWave checkpoint.
+A post-update restart did not repeat the reindex.
+
+The update retained the existing node chain, pool configuration, configured
+payout, and rollback policy. The non-submitting Stratum probe, private UI checks,
+telemetry and port controls, plus app and OS rollback rejection all passed.
+Core-accepted mainnet `1...`, `3...`, and `bc1...` payout families validated;
+invalid, wrong-network, RPC-unavailable, and malformed-RPC cases did not mutate
+saved configuration or payout history. Bounded pending-address recovery and the
+MAIN banner correction also passed.
+
+The corrected versioned Compose command repairs the small CKPool `/config` tree
+on every init before executing any preserved, previously seeded init script. The
+live app, running as uid/gid 1000, successfully created and atomically replaced a
+file in that directory. The potentially large `/www` sharelog tree remains a
+separate conditional ownership repair, and the current pool configuration was
+not rewritten. The exact observations are recorded in
+`DEV-ACCEPTANCE-EVIDENCE.json` and bound to the accepted DEV commit and Compose
+checksum above.

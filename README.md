@@ -20,15 +20,32 @@ The private build repo publishes the UI image to GHCR; the recipe points at that
 
 ## Current status
 
-- Current MAIN-store package version: `0.1.10`
-- Current DEV-store package version: `0.1.10-dev`
+- Current MAIN-store package version: `0.1.11`
+- Current DEV-store package version: `0.1.11-dev`
 - Public repo package path here: `willitmod-dev-bc2/`
 - Mirrored DEV-store package: `WillItMod/5tratStore-dev/willitmod-dev-bc2`
 - MAIN-store package: `WillItMod/5tratStore-main/willitmod-dev-bc2`
 - Miner endpoint: `stratum+tcp://<host-ip>:2345`
 - For the cross-project version matrix and release/changelog pointers, see `https://github.com/WillItMod/AxeSuite/blob/main/docs/releases.md`.
-- Both stores consume the same tested application and Core image digests. DEV
-  retains commit-bound candidate tags while MAIN uses the promoted stable tags.
+- DEV pins the accepted commit-bound application candidate. MAIN pins the
+  stable tag promoted from that exact tested digest without rebuilding.
+
+## AxeBC2 0.1.11 application release
+
+The DEV recipe pins application candidate
+`0.1.11-candidate.ecf6e2c8cfd0` at
+`sha256:23a7962e223da5549eba52697c6f4cfa16ab74cba935c68c48148a4c515302b4`,
+built from private application source revision
+`ecf6e2c8cfd0e42ea53d3cc146b18cd6d4c4b563` by workflow run `33895447789`.
+Promotion workflow run `33898645561` copied that exact multi-architecture digest,
+without rebuilding, to the DEV and MAIN `0.1.11` application tags.
+It fixes strict Core-backed payout validation, bounded recovery of older pending
+checks, and the misleading MAIN payout banner. Its versioned Compose init command
+also keeps the small CKPool `/config` tree writable on every init and conditionally
+repairs existing `/www` sharelog ownership when required, before running the
+preserved init script from an older installation. Core and CKPool are unchanged;
+existing state is retained and this update does not request another blockchain
+reindex.
 
 ## BitcoinII Core 31 release
 
@@ -44,8 +61,9 @@ stable tag.
 The public recipe mirrors the released DEV package and pins Core candidate
 `31.1.0-rc.cdf44542dde2` at
 `sha256:8875917ece57668fe9925d40a256ce8d429a3071511bb555d4ace1fa4370afc6`.
-The MAIN store's stable `31.1.0` tag resolves to that exact digest. The DEV and
-MAIN application tags likewise resolve to the same tested application digest.
+The MAIN store's stable `31.1.0` tag resolves to that exact digest. The MAIN
+application tag likewise resolves to the exact 0.1.11 DEV-tested application
+digest.
 
 The image uses a digest-pinned Debian base and Debian package indexes frozen at
 the `20260830T000000Z` snapshot. It retains the upstream `COPYING`, `README.md`,
@@ -88,15 +106,23 @@ block if the upgraded network accepts it.
 
 ### Live acceptance
 
-The exact DEV recipe published here was installed and tested on
-`10.10.10.235` with the checksum-pinned 5tratumOS `v0.7.12-dev` bundle. The
-one-time full reindex completed, the height-57,752 checkpoint and minimum
-chainwork were verified, a level-4 `verifychain` passed, and the node matched
-the BitcoinII explorer at height 58,433. A subsequent full app restart did not
+The exact application candidate and corrected DEV recipe were accepted on
+`10.10.10.235` at `2026-09-04T17:22:22Z` with the checksum-pinned 5tratumOS
+`v0.7.12-dev` bundle. The tested recipe is DEV store commit
+`249ab61506dc09c2151d39e2b210f5f18d75ff21`; its Compose SHA-256 is
+`93ceba92069947f47d650a5fb32205836fe070d83707f36912a2e0e83beb1244`.
+
+Core 31 remained fully synchronized, passed level-4 `verifychain`, and matched
+the BitcoinII explorer at height 58,444 and block hash
+`00000000000000001e6ee54b268e62f3f1306a04cdb8f08a30c712e3e1cc3996`.
+The completed migration markers, configured payout, pool configuration, rollback
+policy, private UI behavior, and Stratum flow were preserved; a restart did not
 repeat the reindex.
 
-The test also verified Core 31 peers, Stratum subscribe/authorize/job flow,
-payout preservation, UI privacy, disabled support telemetry, outbound-only P2P,
-and rejection of app and OS rollback. Sanitized machine-readable evidence is
-published in
+Acceptance also covered Core-valid `1...`, `3...`, and `bc1...` payout families,
+fail-closed invalid and RPC-unavailable cases, bounded pending-address recovery,
+the corrected MAIN banner, and an atomic payout write by uid/gid 1000 in the
+fresh-install CKPool config directory. Telemetry, public P2P publication, NAT-PMP,
+and incompatible app/OS rollbacks remained disabled or rejected as required.
+The sanitized machine-readable evidence is published in
 [`DEV-ACCEPTANCE-EVIDENCE.json`](willitmod-dev-bc2/DEV-ACCEPTANCE-EVIDENCE.json).
