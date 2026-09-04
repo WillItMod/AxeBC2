@@ -7,11 +7,18 @@ on:
       - README.md
       - scripts/test-bitcoinii-wrapper.sh
       - scripts/validate-axebc2-v31-release.sh
+      - willitmod-dev-bc2/CORE31-DEV-RELEASE.md
+      - willitmod-dev-bc2/DEV-ACCEPTANCE-EVIDENCE.json
       - willitmod-dev-bc2/LICENSES.md
       - willitmod-dev-bc2/SHOCKWAVE_AUTHORIZATION.md
       - willitmod-dev-bc2/docker-compose.yml
       - willitmod-dev-bc2/data/bitcoiniid/Dockerfile
       - willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+      - willitmod-dev-bc2/data/init/init.sh
+      - willitmod-dev-bc2/data/node/.gitkeep
+      - willitmod-dev-bc2/data/pool/config/.gitkeep
+      - willitmod-dev-bc2/data/pool/www/.gitkeep
+      - willitmod-dev-bc2/data/templates/bitcoinII.conf.template
       - willitmod-dev-bc2/umbrel-app.yml
   workflow_dispatch:
     inputs:
@@ -74,8 +81,12 @@ jobs:
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git cat-file -e "${BASE_SHA}^{commit}"
           sh -n willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+          sh -n willitmod-dev-bc2/data/init/init.sh
           sh -n scripts/validate-axebc2-v31-release.sh
           sh -n scripts/test-bitcoinii-wrapper.sh
+          # SC2015 is intentional here: either an unreadable marker or a
+          # failed marker validation must take the shared fail path.
+          shellcheck -e SC2015 willitmod-dev-bc2/data/init/init.sh
           shellcheck \
             willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
             scripts/validate-axebc2-v31-release.sh \
@@ -153,8 +164,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           sh -n willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh
+          sh -n willitmod-dev-bc2/data/init/init.sh
           sh -n scripts/validate-axebc2-v31-release.sh
           sh -n scripts/test-bitcoinii-wrapper.sh
+          # SC2015 is intentional here: either an unreadable marker or a
+          # failed marker validation must take the shared fail path.
+          shellcheck -e SC2015 willitmod-dev-bc2/data/init/init.sh
           shellcheck \
             willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
             scripts/validate-axebc2-v31-release.sh \
