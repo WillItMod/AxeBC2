@@ -84,9 +84,11 @@ jobs:
           sh -n willitmod-dev-bc2/data/init/init.sh
           sh -n scripts/validate-axebc2-v31-release.sh
           sh -n scripts/test-bitcoinii-wrapper.sh
+          # SC2015 is intentional here: either an unreadable marker or a
+          # failed marker validation must take the shared fail path.
+          shellcheck -e SC2015 willitmod-dev-bc2/data/init/init.sh
           shellcheck \
             willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
-            willitmod-dev-bc2/data/init/init.sh \
             scripts/validate-axebc2-v31-release.sh \
             scripts/test-bitcoinii-wrapper.sh
           scripts/validate-axebc2-v31-release.sh 31.1.0 true
@@ -165,9 +167,11 @@ jobs:
           sh -n willitmod-dev-bc2/data/init/init.sh
           sh -n scripts/validate-axebc2-v31-release.sh
           sh -n scripts/test-bitcoinii-wrapper.sh
+          # SC2015 is intentional here: either an unreadable marker or a
+          # failed marker validation must take the shared fail path.
+          shellcheck -e SC2015 willitmod-dev-bc2/data/init/init.sh
           shellcheck \
             willitmod-dev-bc2/data/bitcoiniid/bitcoinIId-wrapper.sh \
-            willitmod-dev-bc2/data/init/init.sh \
             scripts/validate-axebc2-v31-release.sh \
             scripts/test-bitcoinii-wrapper.sh
           scripts/validate-axebc2-v31-release.sh "$CORE_VERSION" "$OFFICIAL_NETWORK_ONLY"
